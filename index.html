@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0820">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Buat Kamu 💗</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600;700&family=Quicksand:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root { --text: #fff5f8; --accent: #ff4d8d; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+  body {
+    background: #0b0820; color: var(--text);
+    font-family: 'Quicksand', sans-serif;
+    -webkit-tap-highlight-color: transparent; user-select: none;
+    -webkit-user-select: none; -webkit-touch-callout: none;
+    touch-action: none; /* cegah zoom/scroll/bounce di iOS */
+    position: fixed; inset: 0;
+  }
+  canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* Layar pembuka */
+  #intro {
+    position: fixed; inset: 0; z-index: 10;
+    display: grid; place-items: center; text-align: center;
+    padding: 0 16px; cursor: pointer; transition: opacity 1.2s ease;
+  }
+  #intro.hide { opacity: 0; pointer-events: none; }
+  .envelope { font-size: 84px; animation: bob 2.4s ease-in-out infinite; }
+  #intro p { margin-top: 18px; font-size: 18px; opacity: .9; text-shadow: 0 2px 12px #000; }
+  #intro small { display: block; margin-top: 8px; opacity: .55; font-size: 13px; }
+
+  /* Teks di bawah hati */
+  #line {
+    position: fixed; left: 16px; right: 16px; bottom: 22vh; bottom: 22dvh; z-index: 5;
+    margin: 0 auto; max-width: 680px; text-align: center;
+    font-size: clamp(20px, 5.5vw, 30px);
+    opacity: 0; transform: translateY(14px); filter: blur(6px);
+    transition: opacity .9s ease, transform .9s ease, filter .9s ease;
+    text-shadow: 0 2px 20px rgba(0,0,0,.6);
+    will-change: opacity, transform, filter;
+    pointer-events: none;
+  }
+  #line.show { opacity: 1; transform: none; filter: none; }
+  @media (pointer: coarse) { #line { filter: none; } }
+  #line.big { font-family: 'Dancing Script', cursive; font-size: clamp(36px, 10vw, 64px); line-height: 1.15; }
+
+  #hugBtn {
+    position: fixed; bottom: calc(24px + env(safe-area-inset-bottom)); left: 50%; z-index: 6;
+    transform: translateX(-50%) scale(.85);
+    padding: 14px 28px; border: 0; border-radius: 999px;
+    background: rgba(255,255,255,.95); color: var(--accent);
+    font: 600 17px 'Quicksand', sans-serif;
+    white-space: nowrap;
+    box-shadow: 0 10px 40px rgba(255, 77, 141, .5);
+    opacity: 0; pointer-events: none; cursor: pointer;
+    transition: opacity .8s ease, transform .8s ease;
+  }
+  #hugBtn.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) scale(1); }
+  #hugBtn:active { transform: translateX(-50%) scale(.94); }
+
+  /* Kilatan putih tepat saat reff */
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 8; }
+  #flash.go { animation: flash 1.4s ease-out; }
+
+  @keyframes bob { 50% { transform: translateY(-10px) rotate(-4deg); } }
+  @keyframes flash { 0% { opacity: .9; } 100% { opacity: 0; } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+
+  <div id="intro">
+    <div>
+      <div class="envelope">💌</div>
+      <p>Ada surat buat kamu.<br>Pake headset ya, terus tap di sini 🎧</p>
+      <small>(volumenya dinyalain dulu)</small>
+    </div>
+  </div>
+
+  <div id="line"></div>
+  <button id="hugBtn">Tap buat peluk 🤗</button>
+  <div id="flash"></div>
+  <audio id="song" src="song.mp3" preload="auto"></audio>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+/* ============ KONFIGURASI — silakan edit ============ */
+const CONFIG = {
+  name: 'Sayang',   // ganti dengan nama/panggilan dia
+  chorusAt: 15,     // detik reff masuk
+  // Timeline teks: [detik, teks, besar?]
+  script: [
+    [1.0,  'Hai, {name}…'],
+    [4.0,  'Aku tau hari ini mungkin nggak gampang buat kamu.'],
+    [8.0,  'Tapi kamu nggak sendirian, oke?'],
+    [11.5, 'Liat ini ya… bentar lagi…'],
+    [15.0, 'Aku cuma mau jadi seseorang buat kamu 💗', true],
+    [21.0, 'Yang selalu ada pas kamu capek.'],
+    [25.0, 'Yang bangga sama kamu, tiap hari.'],
+    [29.0, 'Kamu hebat. Kamu cukup. Kamu disayang.'],
+    [33.5, 'Senyum dong, {name} 🥺', true],
+    [38.0, 'Aku sayang kamu. Banget. ❤️', true],
+  ],
+};
+/* ==================================================== */
+
+const $ = (id) => document.getElementById(id);
+const song = $('song'), intro = $('intro'), line = $('line'),
+      hugBtn = $('hugBtn'), flash = $('flash');
+
+const isMobile = matchMedia('(pointer: coarse)').matches || innerWidth < 700;
+let PR = Math.min(devicePixelRatio || 1, isMobile ? 1.25 : 1.5);
+
+/* ---------- Renderer, scene, kamera ---------- */
+const renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(PR);
+renderer.setSize(innerWidth, innerHeight);
+
+const scene = new THREE.Scene();
+const BG_NIGHT = new THREE.Color('#0b0820');
+const BG_WARM  = new THREE.Color('#3d0b2a');
+scene.background = BG_NIGHT.clone();
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 1000);
+
+// Jarak kamera disesuaikan aspek layar supaya hati muat di HP (portrait)
+let baseZ = 55;
+function fitCamera() {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  baseZ = Math.max(55, 44 / camera.aspect);
+}
+fitCamera();
+
+/* ---------- Post-processing: bloom = efek glow ---------- */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 1.0, 0.7, 0.0);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+/* ---------- Partikel hati ----------
+   Semua animasi dihitung di GPU (vertex shader) lewat uniform,
+   jadi CPU tidak menyentuh tiap partikel per frame → mulus. */
+const N = isMobile ? 5000 : 14000;
+const aHeart = new Float32Array(N * 3);
+const aScatter = new Float32Array(N * 3);
+const aRand = new Float32Array(N);
+const aSize = new Float32Array(N);
+
+for (let i = 0; i < N; i++) {
+  // Rejection sampling di dalam hati implisit (x²+y²−1)³ − x²y³ ≤ 0.
+  // Sebaran merata (tanpa garis numpuk di tengah); ~35% dipaksa dekat tepi agar outline tegas.
+  const edgeOnly = Math.random() < 0.35;
+  let x, y, f;
+  do {
+    x = (Math.random() * 2 - 1) * 1.15;
+    y = Math.random() * 2.3 - 1.05;
+    const k = x * x + y * y - 1;
+    f = k * k * k - x * x * y * y * y;
+  } while (f > 0 || (edgeOnly && f < -0.04));
+  const thick = 0.6 + 7 * Math.cbrt(-f);   // makin ke tengah makin tebal (3D)
+  aHeart.set([x * 14, y * 14 - 1, (Math.random() - 0.5) * thick], i * 3);
+
+  // Posisi awal acak dalam bola besar (debu kosmik sebelum membentuk hati)
+  const u = Math.random() * 2 - 1, phi = Math.random() * Math.PI * 2;
+  const R = 40 + Math.random() * 60, s = Math.sqrt(1 - u * u);
+  aScatter.set([R * s * Math.cos(phi), R * u, R * s * Math.sin(phi)], i * 3);
+
+  aRand[i] = Math.random();
+  aSize[i] = 0.6 + Math.random() * 1.6;
+}
+
+const heartGeo = new THREE.BufferGeometry();
+heartGeo.setAttribute('position', new THREE.BufferAttribute(aHeart, 3)); // untuk bounding/culling
+heartGeo.setAttribute('aHeart', new THREE.BufferAttribute(aHeart, 3));
+heartGeo.setAttribute('aScatter', new THREE.BufferAttribute(aScatter, 3));
+heartGeo.setAttribute('aRand', new THREE.BufferAttribute(aRand, 1));
+heartGeo.setAttribute('aSize', new THREE.BufferAttribute(aSize, 1));
+
+const heartUniforms = {
+  uTime: { value: 0 }, uForm: { value: 0 }, uExplode: { value: 0 },
+  uBeat: { value: 0 }, uKick: { value: 0 }, uWarm: { value: 0 },
+  uPR: { value: PR }, uScale: { value: 1 }, uBoost: { value: 1 },
+};
+
+const heartMat = new THREE.ShaderMaterial({
+  uniforms: heartUniforms,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: /* glsl */`
+    uniform float uTime, uForm, uExplode, uBeat, uKick, uWarm, uPR, uScale, uBoost;
+    attribute vec3 aHeart, aScatter;
+    attribute float aRand, aSize;
+    varying vec3 vColor;
+    varying float vAlpha;
+
+    void main() {
+      // Hati yang berdetak + sedikit "napas" per partikel
+      vec3 h = aHeart * (1.0 + uBeat * 0.09);
+      h += 0.3 * vec3(sin(uTime * 1.3 + aRand * 40.0),
+                      cos(uTime * 1.1 + aRand * 31.0),
+                      sin(uTime * 0.9 + aRand * 23.0));
+
+      // Debu → hati (uForm), lalu meledak ke luar (uExplode)
+      vec3 pos = mix(aScatter, h, uForm);
+      pos += normalize(aScatter) * uExplode * (20.0 + aRand * 50.0);
+      pos += normalize(aHeart + 0.001) * uKick * (1.0 + aRand * 4.0);
+
+      vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = min(aSize * uPR * uScale * (180.0 / -mv.z), 18.0 * uPR);
+
+      vec3 night = mix(vec3(1.0, 0.25, 0.55), vec3(0.7, 0.5, 1.0), aRand);
+      vec3 warm  = mix(vec3(1.0, 0.35, 0.5),  vec3(1.0, 0.82, 0.55), aRand);
+      vColor = mix(night, warm, uWarm);
+      vAlpha = mix(0.25, 0.75, uForm) * uBoost;
+    }`,
+  fragmentShader: /* glsl */`
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main() {
+      float d = length(gl_PointCoord - 0.5);
+      float a = smoothstep(0.5, 0.0, d);
+      gl_FragColor = vec4(vColor, a * a * vAlpha);
+    }`,
+});
+
+const heartGroup = new THREE.Group();
+heartGroup.add(new THREE.Points(heartGeo, heartMat));
+heartGroup.position.y = 4;
+scene.add(heartGroup);
+
+/* ---------- Bintang ---------- */
+const S = 1500;
+const starPos = new Float32Array(S * 3), starRand = new Float32Array(S);
+for (let i = 0; i < S; i++) {
+  const u = Math.random() * 2 - 1, phi = Math.random() * Math.PI * 2;
+  const R = 150 + Math.random() * 200, s = Math.sqrt(1 - u * u);
+  starPos.set([R * s * Math.cos(phi), R * u, -Math.abs(R * s * Math.sin(phi))], i * 3);
+  starRand[i] = Math.random();
+}
+const starGeo = new THREE.BufferGeometry();
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+starGeo.setAttribute('aRand', new THREE.BufferAttribute(starRand, 1));
+const starUniforms = { uTime: { value: 0 }, uFade: { value: 1 }, uPR: { value: PR } };
+const stars = new THREE.Points(starGeo, new THREE.ShaderMaterial({
+  uniforms: starUniforms,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: /* glsl */`
+    uniform float uTime, uPR;
+    attribute float aRand;
+    varying float vTw;
+    void main() {
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = (1.0 + aRand * 2.0) * uPR * (300.0 / -mv.z);
+      vTw = 0.35 + 0.65 * abs(sin(uTime * (0.5 + aRand * 1.5) + aRand * 50.0));
+    }`,
+  fragmentShader: /* glsl */`
+    uniform float uFade;
+    varying float vTw;
+    void main() {
+      float a = smoothstep(0.5, 0.0, length(gl_PointCoord - 0.5));
+      gl_FragColor = vec4(vec3(1.0), a * vTw * uFade);
+    }`,
+}));
+scene.add(stars);
+
+/* ---------- Hujan hati kecil (muncul setelah reff) ----------
+   Posisi jatuh dihitung di shader pakai mod(), tanpa update buffer. */
+const P = isMobile ? 160 : 320;
+const petalSeed = new Float32Array(P * 4);
+for (let i = 0; i < P; i++) {
+  petalSeed.set([
+    (Math.random() - 0.5) * 120,   // x
+    Math.random() * 100,           // offset y
+    -30 + Math.random() * 45,      // z
+    2 + Math.random() * 4,         // kecepatan jatuh
+  ], i * 4);
+}
+const petalGeo = new THREE.BufferGeometry();
+petalGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(P * 3), 3));
+petalGeo.setAttribute('aSeed', new THREE.BufferAttribute(petalSeed, 4));
+const petalUniforms = { uTime: { value: 0 }, uRain: { value: 0 }, uPR: { value: PR }, uScale: { value: 1 } };
+const petals = new THREE.Points(petalGeo, new THREE.ShaderMaterial({
+  uniforms: petalUniforms,
+  transparent: true, depthWrite: false,
+  vertexShader: /* glsl */`
+    uniform float uTime, uPR, uScale;
+    attribute vec4 aSeed;
+    varying float vRot;
+    varying vec3 vCol;
+    void main() {
+      float range = 100.0;
+      float y = mod(aSeed.y - uTime * aSeed.w, range) - range * 0.5;
+      float x = aSeed.x + sin(uTime * 0.8 + aSeed.y) * 2.5;
+      vec4 mv = modelViewMatrix * vec4(x, y, aSeed.z, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = (10.0 + aSeed.w * 4.0) * uPR * uScale * (55.0 / -mv.z);
+      vRot = sin(uTime * 0.7 * aSeed.w + aSeed.y) * 0.6;
+      vCol = mix(vec3(1.0, 0.45, 0.65), vec3(1.0, 0.85, 0.9), fract(aSeed.y * 7.13));
+    }`,
+  fragmentShader: /* glsl */`
+    uniform float uRain;
+    varying float vRot;
+    varying vec3 vCol;
+    void main() {
+      // Bentuk hati via persamaan implisit (x²+y²−1)³ − x²y³ < 0
+      vec2 p = gl_PointCoord * 2.0 - 1.0;
+      p.y = -p.y;
+      float c = cos(vRot), s = sin(vRot);
+      p = mat2(c, -s, s, c) * p;
+      p = p * 1.3 + vec2(0.0, 0.25);
+      float k = p.x * p.x + p.y * p.y - 1.0;
+      float f = k * k * k - p.x * p.x * p.y * p.y * p.y;
+      float a = smoothstep(0.03, -0.03, f);
+      if (a < 0.01 || uRain < 0.001) discard;
+      gl_FragColor = vec4(vCol, a * uRain * 0.9);
+    }`,
+}));
+petals.frustumCulled = false;
+scene.add(petals);
+
+/* ---------- Helper easing ---------- */
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const easeOutCubic = (x) => 1 - Math.pow(1 - clamp01(x), 3);
+
+/* ---------- Teks ---------- */
+let scriptIdx = 0;
+function showLine(text, big) {
+  line.classList.remove('show');
+  setTimeout(() => {
+    line.textContent = text.replaceAll('{name}', CONFIG.name);
+    line.classList.toggle('big', !!big);
+    line.classList.add('show');
+  }, 400);
+}
+
+/* ---------- State & interaksi ---------- */
+let playing = false, chorusFired = false;
+let songClock = 0;          // jam lagu yang dihaluskan
+let kick = 0;               // dorongan dari tap / tombol peluk
+const pointer = new THREE.Vector2();
+
+addEventListener('pointermove', (e) => {
+  pointer.set(e.clientX / innerWidth * 2 - 1, e.clientY / innerHeight * 2 - 1);
+});
+
+// Compile semua shader sekarang supaya tidak ada jank saat lagu mulai / reff
+renderer.compile(scene, camera);
+
+intro.addEventListener('click', async () => {
+  // iOS 17+: pastikan audio dianggap media playback (tetap bunyi walau mode silent)
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+  try { await song.play(); } catch (e) { console.error(e); return; }
+  playing = true;
+  intro.classList.add('hide');
+}, { once: true });
+
+document.addEventListener('pointerdown', (e) => {
+  if (chorusFired && playing) kick = 1;
+});
+hugBtn.addEventListener('click', () => {
+  kick = 1.6;
+  navigator.vibrate?.(40);
+});
+song.addEventListener('ended', () => {
+  playing = false;
+  hugBtn.textContent = 'Putar lagi 🔁';
+  hugBtn.onclick = () => location.reload();
+});
+
+function fireChorus() {
+  chorusFired = true;
+  flash.classList.add('go');
+  navigator.vibrate?.([80, 60, 160]);
+}
+
+/* ---------- Kualitas adaptif ----------
+   Ukur FPS rata-rata; kalau HP keberatan, turunkan resolusi dulu,
+   lalu matikan bloom (glow diganti partikel sedikit lebih terang). */
+let useBloom = true, fpsAcc = 0, fpsFrames = 0, qualityLevel = 0;
+function adaptQuality(dt) {
+  fpsAcc += dt; fpsFrames++;
+  if (fpsAcc < 1.5) return;
+  const fps = fpsFrames / fpsAcc;
+  fpsAcc = 0; fpsFrames = 0;
+  if (fps > 48 || qualityLevel >= 2) return;
+  qualityLevel++;
+  if (qualityLevel === 1) {
+    PR = 1;
+  } else {
+    useBloom = false;
+    heartUniforms.uBoost.value = 1.6;
+  }
+  heartUniforms.uPR.value = starUniforms.uPR.value = petalUniforms.uPR.value = PR;
+  renderer.setPixelRatio(PR);
+  composer.setPixelRatio(PR);
+  composer.setSize(innerWidth, innerHeight);
+}
+
+/* ---------- Loop utama ---------- */
+let last = performance.now();
+const elapsed = { t: 0 };
+
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  elapsed.t += dt;
+
+  // audio.currentTime di beberapa browser update-nya patah-patah,
+  // jadi pakai jam sendiri dan sinkron ulang hanya kalau melenceng.
+  // Jam hanya jalan saat audio benar-benar bunyi (iOS bisa buffering di awal)
+  if (playing && !song.paused && song.readyState >= 3) {
+    songClock += dt;
+    if (Math.abs(song.currentTime - songClock) > 0.12) songClock = song.currentTime;
+  }
+  const t = songClock;
+  const C = CONFIG.chorusAt;
+
+  // Timeline teks
+  while (scriptIdx < CONFIG.script.length && t >= CONFIG.script[scriptIdx][0]) {
+    const [, text, big] = CONFIG.script[scriptIdx++];
+    showLine(text, big);
+  }
+  if (!chorusFired && t >= C) fireChorus();
+  if (t >= C + 6) hugBtn.classList.add('show');
+
+  // Fase build-up: debu berkumpul jadi hati, detak makin cepat
+  const form = easeOutCubic(smooth(0.3, C - 1.0, t) * 1.0);
+  let beat;
+  if (t < C) {
+    const k = clamp01(t / C);
+    const bpm = 50 + k * 100;
+    beat = Math.pow(Math.max(0, Math.sin(t * Math.PI * bpm / 60)), 8) * (0.4 + k);
+  } else {
+    // Detak "lub-dub" setelah reff
+    const ph = (t * 1.25) % 1;
+    beat = Math.exp(-ph * 14) + 0.6 * Math.exp(-Math.max(0, ph - 0.22) * 14) * (ph > 0.22 ? 1 : 0);
+  }
+
+  // Ledakan saat reff: cepat keluar, lalu menyatu kembali
+  const d = t - C;
+  const explode = d < 0 ? 0 : easeOutCubic(d / 0.8) * (1 - smooth(1.4, 4.2, d));
+  const warm = smooth(C, C + 2.5, t);
+
+  kick *= Math.pow(0.02, dt);  // decay eksponensial ~1 detik
+
+  // Update uniform
+  heartUniforms.uTime.value = elapsed.t;
+  heartUniforms.uForm.value = form;
+  heartUniforms.uBeat.value = beat;
+  heartUniforms.uExplode.value = explode;
+  heartUniforms.uWarm.value = warm;
+  heartUniforms.uKick.value = kick;
+  heartUniforms.uScale.value = baseZ / 55;
+  starUniforms.uTime.value = elapsed.t;
+  starUniforms.uFade.value = 1 - warm * 0.75;
+  petalUniforms.uTime.value = elapsed.t;
+  petalUniforms.uRain.value = smooth(C + 0.5, C + 3, t);
+  petalUniforms.uScale.value = baseZ / 55;
+
+  scene.background.copy(BG_NIGHT).lerp(BG_WARM, warm);
+  bloom.strength = 0.9 + warm * 0.5 + explode * 1.2 + kick * 0.3;
+
+  // Kamera: dolly pelan mendekat saat build-up, guncang sedikit saat reff, parallax pointer
+  const dolly = 1.35 - 0.35 * easeOutCubic(t / C);
+  const shake = d > 0 ? Math.exp(-d * 3) * 0.8 : 0;
+  // Di HP tidak ada hover → kamera melayang pelan otomatis
+  const sway = isMobile ? Math.sin(elapsed.t * 0.3) * 3 : 0;
+  camera.position.set(
+    pointer.x * 4 + sway + Math.sin(elapsed.t * 40) * shake,
+    -pointer.y * 3 + Math.cos(elapsed.t * 37) * shake,
+    baseZ * dolly
+  );
+  camera.lookAt(0, 2, 0);
+
+  heartGroup.rotation.y = Math.sin(elapsed.t * 0.45) * 0.35 + explode * 0.6;
+  stars.rotation.y = elapsed.t * 0.01;
+
+  adaptQuality(dt);
+  if (useBloom) composer.render(); else renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// Rotasi layar / address bar Safari muncul-hilang
+addEventListener('resize', () => {
+  fitCamera();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
