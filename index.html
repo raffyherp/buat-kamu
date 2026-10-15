@@ -104,6 +104,12 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 const CONFIG = {
   name: 'Sayang',   // ganti dengan nama/panggilan dia
   chorusAt: 15,     // detik reff masuk
+  // Hasil analisis lagu: 87 BPM, beat pertama di 0.048 dtk (downbeat reff ≈ 15.21 dtk)
+  bpm: 87.05,
+  firstBeat: 0.048,
+  photos: ['photos/1.jpg', 'photos/2.jpg', 'photos/3.jpg', 'photos/4.jpg'],
+  photoEveryBeats: 1,   // ganti foto tiap N beat (2 = lebih santai)
+  photoFadeIn: 2.2,     // detik setelah reff foto mulai muncul (saat hati menyatu lagi)
   // Timeline teks: [detik, teks, besar?]
   script: [
     [1.0,  'Hai, {name}…'],
@@ -111,10 +117,11 @@ const CONFIG = {
     [8.0,  'Tapi kamu nggak sendirian, oke?'],
     [11.5, 'Liat ini ya… bentar lagi…'],
     [15.0, 'Aku cuma mau jadi seseorang buat kamu 💗', true],
-    [21.0, 'Yang selalu ada pas kamu capek.'],
-    [25.0, 'Yang bangga sama kamu, tiap hari.'],
-    [29.0, 'Kamu hebat. Kamu cukup. Kamu disayang.'],
-    [33.5, 'Senyum dong, {name} 🥺', true],
+    [20.5, 'Pokoknya kamu harus tau ya…'],
+    [23.5, 'Aku tuh selalu sayang kamu.'],
+    [27.0, 'Dan aku bakal selalu ada buat kamu, kapan pun 🤍'],
+    [31.0, 'Kamu hebat, kamu cukup, kamu disayang.'],
+    [34.5, 'Senyum dong, {name} 🥺', true],
     [38.0, 'Aku sayang kamu. Banget. ❤️', true],
   ],
 };
@@ -163,6 +170,7 @@ const aHeart = new Float32Array(N * 3);
 const aScatter = new Float32Array(N * 3);
 const aRand = new Float32Array(N);
 const aSize = new Float32Array(N);
+const aEdge = new Float32Array(N);   // 1 = partikel outline, 0 = isi
 
 for (let i = 0; i < N; i++) {
   // Rejection sampling di dalam hati implisit (x²+y²−1)³ − x²y³ ≤ 0.
@@ -185,6 +193,7 @@ for (let i = 0; i < N; i++) {
 
   aRand[i] = Math.random();
   aSize[i] = 0.6 + Math.random() * 1.6;
+  aEdge[i] = edgeOnly ? 1 : 0;
 }
 
 const heartGeo = new THREE.BufferGeometry();
@@ -193,10 +202,11 @@ heartGeo.setAttribute('aHeart', new THREE.BufferAttribute(aHeart, 3));
 heartGeo.setAttribute('aScatter', new THREE.BufferAttribute(aScatter, 3));
 heartGeo.setAttribute('aRand', new THREE.BufferAttribute(aRand, 1));
 heartGeo.setAttribute('aSize', new THREE.BufferAttribute(aSize, 1));
+heartGeo.setAttribute('aEdge', new THREE.BufferAttribute(aEdge, 1));
 
 const heartUniforms = {
   uTime: { value: 0 }, uForm: { value: 0 }, uExplode: { value: 0 },
-  uBeat: { value: 0 }, uKick: { value: 0 }, uWarm: { value: 0 },
+  uBeat: { value: 0 }, uKick: { value: 0 }, uWarm: { value: 0 }, uPhoto: { value: 0 },
   uPR: { value: PR }, uScale: { value: 1 }, uBoost: { value: 1 },
 };
 
@@ -204,9 +214,9 @@ const heartMat = new THREE.ShaderMaterial({
   uniforms: heartUniforms,
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   vertexShader: /* glsl */`
-    uniform float uTime, uForm, uExplode, uBeat, uKick, uWarm, uPR, uScale, uBoost;
+    uniform float uTime, uForm, uExplode, uBeat, uKick, uWarm, uPR, uScale, uBoost, uPhoto;
     attribute vec3 aHeart, aScatter;
-    attribute float aRand, aSize;
+    attribute float aRand, aSize, aEdge;
     varying vec3 vColor;
     varying float vAlpha;
 
@@ -230,6 +240,8 @@ const heartMat = new THREE.ShaderMaterial({
       vec3 warm  = mix(vec3(1.0, 0.35, 0.5),  vec3(1.0, 0.82, 0.55), aRand);
       vColor = mix(night, warm, uWarm);
       vAlpha = mix(0.25, 0.75, uForm) * uBoost;
+      // Saat foto tampil, partikel isi ditipiskan jadi glitter → foto terlihat, outline tetap tegas
+      vAlpha *= mix(1.0, 0.1, uPhoto * (1.0 - aEdge));
     }`,
   fragmentShader: /* glsl */`
     varying vec3 vColor;
@@ -245,6 +257,64 @@ const heartGroup = new THREE.Group();
 heartGroup.add(new THREE.Points(heartGeo, heartMat));
 heartGroup.position.y = 4;
 scene.add(heartGroup);
+
+/* ---------- Foto di dalam hati ----------
+   Plane dengan mask hati implisit (tepi lembut), crossfade 2 tekstur per beat.
+   Dirender sebelum partikel → glitter partikel menempel di atas foto. */
+const photoUniforms = {
+  uTexA: { value: null }, uTexB: { value: null },
+  uMix: { value: 0 }, uPhoto: { value: 0 }, uBeat: { value: 0 }, uZoom: { value: 1 },
+};
+const photoMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(36, 36),
+  new THREE.ShaderMaterial({
+    uniforms: photoUniforms,
+    transparent: true, depthWrite: false,
+    vertexShader: /* glsl */`
+      varying vec2 vUv;
+      varying vec2 vH;
+      void main() {
+        vUv = uv;
+        // Koordinat ruang hati: partikel memakai (x*14, y*14 - 1)
+        vH = vec2(position.x, position.y + 1.0) / 14.0;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: /* glsl */`
+      uniform sampler2D uTexA, uTexB;
+      uniform float uMix, uPhoto, uBeat, uZoom;
+      varying vec2 vUv;
+      varying vec2 vH;
+      void main() {
+        float k = dot(vH, vH) - 1.0;
+        float f = k * k * k - vH.x * vH.x * vH.y * vH.y * vH.y;
+        float mask = smoothstep(0.0, -0.3, f);      // tepi memudar ke dalam
+        if (mask * uPhoto < 0.003) discard;
+
+        vec2 uv = (vUv - 0.5) / uZoom + 0.5;          // zoom kecil tiap beat
+        vec3 col = mix(texture2D(uTexA, uv).rgb, texture2D(uTexB, uv).rgb, uMix);
+
+        // Color grade pink-hangat supaya menyatu dengan warna hati
+        float l = dot(col, vec3(0.299, 0.587, 0.114));
+        vec3 tint = mix(vec3(0.3, 0.04, 0.15), vec3(1.0, 0.85, 0.88), l);
+        col = mix(col, tint, 0.18) * (0.95 + uBeat * 0.12);
+
+        gl_FragColor = vec4(col, mask * uPhoto);
+        #include <colorspace_fragment>
+      }`,
+  })
+);
+photoMesh.renderOrder = -1;
+heartGroup.add(photoMesh);
+
+// Muat foto lalu upload ke GPU lebih awal (hindari patah saat pertama tampil)
+const photoTex = [];
+Promise.all(CONFIG.photos.map((src) => new THREE.TextureLoader().loadAsync(src))).then((list) => {
+  list.forEach((tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    renderer.initTexture(tex);
+    photoTex.push(tex);
+  });
+}).catch((e) => console.error('Foto gagal dimuat', e));
 
 /* ---------- Bintang ---------- */
 const S = 1500;
@@ -335,6 +405,7 @@ const petals = new THREE.Points(petalGeo, new THREE.ShaderMaterial({
     }`,
 }));
 petals.frustumCulled = false;
+petals.renderOrder = -2;   // digambar sebelum foto → tidak menutupi wajah
 scene.add(petals);
 
 /* ---------- Helper easing ---------- */
@@ -419,6 +490,7 @@ function adaptQuality(dt) {
 /* ---------- Loop utama ---------- */
 let last = performance.now();
 const elapsed = { t: 0 };
+const BEAT = 60 / CONFIG.bpm;   // detik per beat
 
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -444,16 +516,30 @@ function frame(now) {
   if (t >= C + 6) hugBtn.classList.add('show');
 
   // Fase build-up: debu berkumpul jadi hati, detak makin cepat
-  const form = easeOutCubic(smooth(0.3, C - 1.0, t) * 1.0);
+  const form = easeOutCubic(smooth(0.3, C - 1.0, t));
+
+  // Posisi dalam grid beat lagu
+  const beatPos = (t - CONFIG.firstBeat) / BEAT;              // beat ke-berapa (pecahan)
+  const sinceBeat = (beatPos - Math.floor(beatPos)) * BEAT;   // detik sejak beat terakhir
   let beat;
   if (t < C) {
     const k = clamp01(t / C);
     const bpm = 50 + k * 100;
     beat = Math.pow(Math.max(0, Math.sin(t * Math.PI * bpm / 60)), 8) * (0.4 + k);
   } else {
-    // Detak "lub-dub" setelah reff
-    const ph = (t * 1.25) % 1;
-    beat = Math.exp(-ph * 14) + 0.6 * Math.exp(-Math.max(0, ph - 0.22) * 14) * (ph > 0.22 ? 1 : 0);
+    // Setelah reff: detak mengikuti beat asli lagu (87 BPM)
+    beat = Math.exp(-sinceBeat * 9);
+  }
+
+  // Foto: ganti tiap N beat, crossfade cepat tepat di beat
+  const photo = photoTex.length ? smooth(C + CONFIG.photoFadeIn, C + CONFIG.photoFadeIn + 1.8, t) : 0;
+  if (photo > 0) {
+    const every = CONFIG.photoEveryBeats;
+    const k = Math.floor(beatPos / every);
+    const n = photoTex.length;
+    photoUniforms.uTexA.value = photoTex[(((k - 1) % n) + n) % n];
+    photoUniforms.uTexB.value = photoTex[((k % n) + n) % n];
+    photoUniforms.uMix.value = smooth(0, 0.22, (beatPos - k * every) * BEAT);
   }
 
   // Ledakan saat reff: cepat keluar, lalu menyatu kembali
@@ -470,6 +556,10 @@ function frame(now) {
   heartUniforms.uExplode.value = explode;
   heartUniforms.uWarm.value = warm;
   heartUniforms.uKick.value = kick;
+  heartUniforms.uPhoto.value = photo;
+  photoUniforms.uPhoto.value = photo;
+  photoUniforms.uBeat.value = beat;
+  photoUniforms.uZoom.value = 1.02 + beat * 0.035 + Math.sin(elapsed.t * 0.25) * 0.02;
   heartUniforms.uScale.value = baseZ / 55;
   starUniforms.uTime.value = elapsed.t;
   starUniforms.uFade.value = 1 - warm * 0.75;
@@ -478,7 +568,9 @@ function frame(now) {
   petalUniforms.uScale.value = baseZ / 55;
 
   scene.background.copy(BG_NIGHT).lerp(BG_WARM, warm);
-  bloom.strength = 0.9 + warm * 0.5 + explode * 1.2 + kick * 0.3;
+  // Glow dikurangi saat foto tampil supaya wajah tidak blur/silau
+  bloom.strength = 0.9 + warm * 0.5 + explode * 1.2 + kick * 0.3 - photo * 0.5;
+  bloom.threshold = photo * 0.75;   // hanya bagian sangat terang (glitter) yang glow, foto tetap tajam
 
   // Kamera: dolly pelan mendekat saat build-up, guncang sedikit saat reff, parallax pointer
   const dolly = 1.35 - 0.35 * easeOutCubic(t / C);
@@ -492,7 +584,8 @@ function frame(now) {
   );
   camera.lookAt(0, 2, 0);
 
-  heartGroup.rotation.y = Math.sin(elapsed.t * 0.45) * 0.35 + explode * 0.6;
+  // Rotasi dikurangi saat foto tampil agar wajah tidak terlalu miring
+  heartGroup.rotation.y = Math.sin(elapsed.t * 0.45) * 0.35 * (1 - photo * 0.6) + explode * 0.6;
   stars.rotation.y = elapsed.t * 0.01;
 
   adaptQuality(dt);
